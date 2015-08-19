@@ -78,8 +78,39 @@ struct vxlanhdr {
 	__be32 vx_vni;
 };
 
+struct vxlan_gpe_hdr {
+#ifdef __LITTLE_ENDIAN_BITFIELD
+  __u8 rco:1,
+    reserved_flags1:1,
+    gpe:1,
+    vni_present:1,
+    reserved_flags2:4;
+#elif defined(__BIG_ENDIAN_BITFIELD) 
+  __u8 reserved_flags2:4,
+    vni_present:1,
+    gpe:1,
+    reserved_flags1:1,
+    rco:1;
+#else
+#error	"Please fix <asm/byteorder.h>"
+#endif
+  __be16 vx_reserved1;
+  __u8 vx_inner_proto; /* Only valid if gpe flag is set */
+  __be32 vx_vni;
+};
+
+struct int_shim_hdr {
+  __be32 int_shim;
+};
+
+struct int_md_hdr {
+  __be32 flags;
+  __be32 ins_mask;
+};
+
 /* VXLAN header flags. */
 #define VXLAN_HF_RCO BIT(24)
+#define VXLAN_HF_GPE BIT(26)
 #define VXLAN_HF_VNI BIT(27)
 #define VXLAN_HF_GBP BIT(31)
 

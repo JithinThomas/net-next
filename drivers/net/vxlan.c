@@ -1231,6 +1231,9 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	struct ip_tunnel_info *info;
 	struct vxlan_sock *vs;
 	struct vxlanhdr *vxh;
+  struct int_shim_hdr *int_sh;
+  struct int_md_hdr *int_md;
+  u32 int_shim, int_flags, int_ins_mask;
 	u32 flags, vni;
 	struct vxlan_metadata _md;
 	struct vxlan_metadata *md = &_md;
@@ -1242,6 +1245,23 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	vxh = (struct vxlanhdr *)(udp_hdr(skb) + 1);
 	flags = ntohl(vxh->vx_flags);
 	vni = ntohl(vxh->vx_vni);
+
+  /* Read the INT shim header */
+  int_sh = (struct int_shim_hdr *)(vxh + 1);
+  int_shim = ntohl(int_sh -> int_shim);
+
+  /* Read the INT metadata header */
+  int_md = (struct int_md_hdr *)(int_sh + 1);
+  int_flags = ntohl(int_md -> flags);
+  int_ins_mask = ntohl(int_md -> ins_mask); 
+
+  /* Strip out the INT shim and metadata headers */
+  __skb_pull(skb, 12);
+
+  /* Clear the GPE flag and next proto bits in order to pass the checks below */
+  flags &= ~VXLAN_HF_GPE;
+  flags &= ~BIT(0);
+  flags &= ~BIT(2);
 
 	if (flags & VXLAN_HF_VNI) {
 		flags &= ~VXLAN_HF_VNI;
@@ -1329,6 +1349,7 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	vxlan_rcv(vs, skb, md, vni >> 8, tun_dst);
+
 	return 0;
 
 drop:
@@ -1775,7 +1796,9 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 			  struct vxlan_metadata *md, bool xnet, u32 vxflags)
 {
 	struct vxlanhdr *vxh;
-	int min_headroom;
+	struct int_shim_hdr *int_sh;
+  struct int_md_hdr *int_md;
+  int min_headroom;
 	int err;
 	bool udp_sum = !!(vxflags & VXLAN_F_UDP_CSUM);
 	int type = udp_sum ? SKB_GSO_UDP_TUNNEL_CSUM : SKB_GSO_UDP_TUNNEL;
@@ -1813,8 +1836,25 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 	if (IS_ERR(skb))
 		return PTR_ERR(skb);
 
+  /* Insert INT metadata header */
+  int_md = (struct int_md_hdr *) skb_push(skb, sizeof(*int_md));
+  int_md->flags = htonl(0x00042000);
+  int_md->ins_mask = htonl(0xAC000000);
+
+  /* Insert INT shim header */
+  int_sh = (struct int_shim_hdr *) skb_push(skb, sizeof(*int_sh));
+  int_sh->int_shim = htonl(0x08000c03);
+
 	vxh = (struct vxlanhdr *) __skb_push(skb, sizeof(*vxh));
 	vxh->vx_flags = htonl(VXLAN_HF_VNI);
+
+  /* Indicates the use of VXLAN-GPE */
+  vxh->vx_flags |= htonl(VXLAN_HF_GPE); 
+
+  /* Setting the next protocol field to 0x05 */
+  vxh->vx_flags |= htonl(BIT(0));
+  vxh->vx_flags |= htonl(BIT(2));
+
 	vxh->vx_vni = vni;
 
 	if (type & SKB_GSO_TUNNEL_REMCSUM) {

@@ -78,7 +78,7 @@ struct vxlanhdr {
 	__be32 vx_vni;
 };
 
-struct vxlan_gpe_hdr {
+struct vxlanhdr_gpe {
 #ifdef __LITTLE_ENDIAN_BITFIELD
   __u8 rco:1,
     reserved_flags1:1,

@@ -50,6 +50,7 @@
 #include <net/ip6_checksum.h>
 #endif
 #include <net/dst_metadata.h>
+#include <linux/inet.h>
 
 #define VXLAN_VERSION	"0.1"
 
@@ -77,6 +78,10 @@ static const u8 all_zeros_mac[ETH_ALEN];
 
 static struct vxlan_sock *vxlan_sock_add(struct net *net, __be16 port,
 					 bool no_share, u32 flags);
+
+#define XNT_PORT 54321
+static struct socket *xnt_socket = NULL;
+static struct sockaddr_in server;
 
 /* per-network namespace private data for this module */
 struct vxlan_net {
@@ -1224,9 +1229,47 @@ drop:
 	kfree_skb(skb);
 }
 
+static int vxlan_xmit_int_data(char *message)
+{
+  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
+
+  /* Prepare message header */
+  struct msghdr msg;
+  struct iovec iov;
+  int len;
+  mm_segment_t old_fs;
+
+  memset(&msg, 0, sizeof(msg));
+  msg.msg_name = &server;
+  msg.msg_flags = 0;
+  msg.msg_namelen = sizeof(struct sockaddr_in);
+  msg.msg_control = NULL;
+  msg.msg_controllen = 0;
+
+  len = strlen(message);
+  iov.iov_base = message;
+  iov.iov_len = len;
+  iov_iter_init(&msg.msg_iter, READ, &iov, 1, len);
+
+  /* Adjust memory boundaries */
+  old_fs = get_fs();
+  set_fs(KERNEL_DS);
+  len = sock_sendmsg(xnt_socket, &msg);
+
+  printk(KERN_INFO "[VXLAN-GPE] len after sock_sendmsg == %d\n", len);
+
+  set_fs(old_fs);
+
+  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
+
+  return 0;
+} 
+
 /* Callback from net/ipv4/udp.c to receive packets */
 static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
+  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
+
 	struct metadata_dst *tun_dst = NULL;
 	struct ip_tunnel_info *info;
 	struct vxlan_sock *vs;
@@ -1262,6 +1305,10 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
   flags &= ~VXLAN_HF_GPE;
   flags &= ~BIT(0);
   flags &= ~BIT(2);
+
+  if (vxlan_xmit_int_data("Hello world!\n") < 0) {
+    printk(KERN_ERR "[VXLAN-GPE] Error while transmitting int_data to preprocessor\n");
+  }
 
 	if (flags & VXLAN_HF_VNI) {
 		flags &= ~VXLAN_HF_VNI;
@@ -1349,6 +1396,8 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	vxlan_rcv(vs, skb, md, vni >> 8, tun_dst);
+
+  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
 
 	return 0;
 
@@ -1795,6 +1844,8 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 			  __be16 src_port, __be16 dst_port, __be32 vni,
 			  struct vxlan_metadata *md, bool xnet, u32 vxflags)
 {
+  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
+
 	struct vxlanhdr *vxh;
 	struct int_shim_hdr *int_sh;
   struct int_md_hdr *int_md;
@@ -1877,6 +1928,8 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 		vxlan_build_gbp_hdr(vxh, vxflags, md);
 
 	skb_set_inner_protocol(skb, htons(ETH_P_TEB));
+
+  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
 
 	return udp_tunnel_xmit_skb(rt, sk, skb, src, dst, tos,
 				   ttl, df, src_port, dst_port, xnet,
@@ -3143,8 +3196,28 @@ static struct pernet_operations vxlan_net_ops = {
 	.size = sizeof(struct vxlan_net),
 };
 
+static int init_xnt_socket(void)
+{
+  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
+
+  int server_error;
+
+  if (sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &xnt_socket) < 0) {
+    printk(KERN_ERR "[VXLAN-GPE] Error creating xnt socket");
+  }
+  
+  server.sin_family = AF_INET;
+  server.sin_addr.s_addr = in_aton("127.0.0.1");
+  server.sin_port = htons((unsigned short)XNT_PORT);
+
+  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
+  return 0;
+}
+
 static int __init vxlan_init_module(void)
 {
+  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
+
 	int rc;
 
 	vxlan_wq = alloc_workqueue("vxlan", 0, 0);
@@ -3164,6 +3237,11 @@ static int __init vxlan_init_module(void)
 	rc = rtnl_link_register(&vxlan_link_ops);
 	if (rc)
 		goto out3;
+
+  if (init_xnt_socket() < 0)
+    goto out3;
+
+  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
 
 	return 0;
 out3:

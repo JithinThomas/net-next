@@ -100,12 +100,47 @@ struct vxlanhdr_gpe {
 };
 
 struct int_shim_hdr {
-  __be32 int_shim;
+  __u8 tpe;
+#ifdef __LITTLE_ENDIAN_BITFIELD
+  __u8 reserved_flags1:3,
+    length:5;
+#elif defined(__BIG_ENDIAN_BITFIELD) 
+  __u8 length:5,
+    reserved_flags1:3;
+#else
+#error	"Please fix <asm/byteorder.h>"
+#endif
+  __u8 reserved_flags2;
+  __u8 next_proto;
 };
 
 struct int_md_hdr {
-  __be32 flags;
-  __be32 ins_mask;
+#ifdef __LITTLE_ENDIAN_BITFIELD
+  __u8 reserved_flags1:1,
+    e:1,
+    o:1,
+    rep:2,
+    dir:1,
+    ver:2;
+  __u8 ins_cnt:5,
+    reserved_flags2:3;
+#elif defined(__BIG_ENDIAN_BITFIELD) 
+  __u8 ver:2,
+    dir:1,
+    rep:2,
+    o:1,
+    e:1,
+    reserved_flags1:1;
+  __u8 reserved_flags2:3,
+    ins_cnt:5;
+#else
+#error	"Please fix <asm/byteorder.h>"
+#endif
+  __u8 max_cnt;
+  __u8 total_cnt;
+  __u8 ins_mask;
+  __u8 unused_ins_mask;
+  __be16 reserved_flags3;
 };
 
 /* VXLAN header flags. */

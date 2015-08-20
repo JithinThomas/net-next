@@ -1231,8 +1231,6 @@ drop:
 
 static int vxlan_xmit_int_data(char *message)
 {
-  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
-
   /* Prepare message header */
   struct msghdr msg;
   struct iovec iov;
@@ -1256,27 +1254,64 @@ static int vxlan_xmit_int_data(char *message)
   set_fs(KERNEL_DS);
   len = sock_sendmsg(xnt_socket, &msg);
 
-  printk(KERN_INFO "[VXLAN-GPE] len after sock_sendmsg == %d\n", len);
-
   set_fs(old_fs);
-
-  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
 
   return 0;
 } 
 
+static int xmit_int_field_int(char *field, unsigned int n)
+{
+  char buf[256];
+  sprintf(buf, "[VXLAN-GPE] %s : %d", field, n);
+  return vxlan_xmit_int_data(buf);
+}
+
+static int xmit_int_field_hex(char *field, unsigned int n)
+{
+  char buf[256];
+  sprintf(buf, "[VXLAN-GPE] %s : 0x%02x", field, n);
+  return vxlan_xmit_int_data(buf);
+}
+
+static int read_int_headers(struct vxlanhdr *vxh)
+{
+  struct int_shim_hdr *int_sh;
+  struct int_md_hdr *int_md;
+
+  /* Read the INT shim header */
+  int_sh = (struct int_shim_hdr *)(vxh + 1);
+
+  /* Read the INT metadata header */
+  int_md = (struct int_md_hdr *)(int_sh + 1);
+
+  vxlan_xmit_int_data("====================================\n");
+  xmit_int_field_int("int_tpe", int_sh->tpe);
+  xmit_int_field_int("int_length", int_sh->length);
+ 
+  xmit_int_field_int("ver", int_md->ver);
+  xmit_int_field_int("dir", int_md->dir);
+  xmit_int_field_int("rep", int_md->rep);
+  xmit_int_field_int("o", int_md->o);
+  xmit_int_field_int("e", int_md->e);
+  xmit_int_field_int("rsvd1", int_md->reserved_flags1);
+  xmit_int_field_int("rsvd2", int_md->reserved_flags2);
+  xmit_int_field_int("ins_cnt", int_md->ins_cnt);
+  xmit_int_field_int("max_cnt", int_md->max_cnt);
+  xmit_int_field_int("tot_cnt", int_md->total_cnt);
+  xmit_int_field_hex("ins_mask", int_md->ins_mask);
+  xmit_int_field_hex("unused_ins_mask", int_md->unused_ins_mask);
+  xmit_int_field_int("rsvd3", int_md->reserved_flags3);
+
+  return 0;
+}
+
 /* Callback from net/ipv4/udp.c to receive packets */
 static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
-  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
-
 	struct metadata_dst *tun_dst = NULL;
 	struct ip_tunnel_info *info;
 	struct vxlan_sock *vs;
 	struct vxlanhdr *vxh;
-  struct int_shim_hdr *int_sh;
-  struct int_md_hdr *int_md;
-  u32 int_shim, int_flags, int_ins_mask;
 	u32 flags, vni;
 	struct vxlan_metadata _md;
 	struct vxlan_metadata *md = &_md;
@@ -1289,14 +1324,7 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	flags = ntohl(vxh->vx_flags);
 	vni = ntohl(vxh->vx_vni);
 
-  /* Read the INT shim header */
-  int_sh = (struct int_shim_hdr *)(vxh + 1);
-  int_shim = ntohl(int_sh -> int_shim);
-
-  /* Read the INT metadata header */
-  int_md = (struct int_md_hdr *)(int_sh + 1);
-  int_flags = ntohl(int_md -> flags);
-  int_ins_mask = ntohl(int_md -> ins_mask); 
+  read_int_headers(vxh);
 
   /* Strip out the INT shim and metadata headers */
   __skb_pull(skb, 12);
@@ -1305,10 +1333,6 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
   flags &= ~VXLAN_HF_GPE;
   flags &= ~BIT(0);
   flags &= ~BIT(2);
-
-  if (vxlan_xmit_int_data("Hello world!\n") < 0) {
-    printk(KERN_ERR "[VXLAN-GPE] Error while transmitting int_data to preprocessor\n");
-  }
 
 	if (flags & VXLAN_HF_VNI) {
 		flags &= ~VXLAN_HF_VNI;
@@ -1396,8 +1420,6 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	vxlan_rcv(vs, skb, md, vni >> 8, tun_dst);
-
-  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
 
 	return 0;
 
@@ -1844,8 +1866,6 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 			  __be16 src_port, __be16 dst_port, __be32 vni,
 			  struct vxlan_metadata *md, bool xnet, u32 vxflags)
 {
-  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
-
 	struct vxlanhdr *vxh;
 	struct int_shim_hdr *int_sh;
   struct int_md_hdr *int_md;
@@ -1889,12 +1909,16 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 
   /* Insert INT metadata header */
   int_md = (struct int_md_hdr *) skb_push(skb, sizeof(*int_md));
-  int_md->flags = htonl(0x00042000);
-  int_md->ins_mask = htonl(0xAC000000);
+  memset(int_md, 0, sizeof(*int_md));
+  int_md->ins_cnt = 4;
+  int_md->max_cnt = 32;
+  int_md->ins_mask = 0xAC;
 
   /* Insert INT shim header */
   int_sh = (struct int_shim_hdr *) skb_push(skb, sizeof(*int_sh));
-  int_sh->int_shim = htonl(0x08000c03);
+  memset(int_sh, 0, sizeof(*int_sh));
+  int_sh->length = 12; /* this header (4) + INT meta data header (8) */
+  int_sh->next_proto = 0x03;
 
 	vxh = (struct vxlanhdr *) __skb_push(skb, sizeof(*vxh));
 	vxh->vx_flags = htonl(VXLAN_HF_VNI);
@@ -1928,8 +1952,6 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 		vxlan_build_gbp_hdr(vxh, vxflags, md);
 
 	skb_set_inner_protocol(skb, htons(ETH_P_TEB));
-
-  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
 
 	return udp_tunnel_xmit_skb(rt, sk, skb, src, dst, tos,
 				   ttl, df, src_port, dst_port, xnet,
@@ -3198,8 +3220,6 @@ static struct pernet_operations vxlan_net_ops = {
 
 static int init_xnt_socket(void)
 {
-  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
-
   int server_error;
 
   if (sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &xnt_socket) < 0) {
@@ -3210,14 +3230,11 @@ static int init_xnt_socket(void)
   server.sin_addr.s_addr = in_aton("127.0.0.1");
   server.sin_port = htons((unsigned short)XNT_PORT);
 
-  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
   return 0;
 }
 
 static int __init vxlan_init_module(void)
 {
-  printk(KERN_INFO "[VXLAN-GPE] Entering %s\n", __FUNCTION__);
-
 	int rc;
 
 	vxlan_wq = alloc_workqueue("vxlan", 0, 0);
@@ -3240,8 +3257,6 @@ static int __init vxlan_init_module(void)
 
   if (init_xnt_socket() < 0)
     goto out3;
-
-  printk(KERN_INFO "[VXLAN-GPE] Exiting %s\n", __FUNCTION__);
 
 	return 0;
 out3:

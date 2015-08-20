@@ -1277,6 +1277,7 @@ static int read_int_headers(struct vxlanhdr *vxh)
 {
   struct int_shim_hdr *int_sh;
   struct int_md_hdr *int_md;
+  int int_md_size;
 
   /* Read the INT shim header */
   int_sh = (struct int_shim_hdr *)(vxh + 1);
@@ -1297,12 +1298,13 @@ static int read_int_headers(struct vxlanhdr *vxh)
   xmit_int_field_int("rsvd2", int_md->reserved_flags2);
   xmit_int_field_int("ins_cnt", int_md->ins_cnt);
   xmit_int_field_int("max_cnt", int_md->max_cnt);
-  xmit_int_field_int("tot_cnt", int_md->total_cnt);
+  xmit_int_field_int("total_cnt", int_md->total_cnt);
   xmit_int_field_hex("ins_mask", int_md->ins_mask);
   xmit_int_field_hex("unused_ins_mask", int_md->unused_ins_mask);
   xmit_int_field_int("rsvd3", int_md->reserved_flags3);
 
-  return 0;
+  int_md_size = 12 + (int_md->total_cnt * int_md->ins_cnt * 4);
+  return int_md_size;
 }
 
 /* Callback from net/ipv4/udp.c to receive packets */
@@ -1315,6 +1317,7 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	u32 flags, vni;
 	struct vxlan_metadata _md;
 	struct vxlan_metadata *md = &_md;
+  u32 int_md_size;
 
 	/* Need Vxlan and inner Ethernet header to be present */
 	if (!pskb_may_pull(skb, VXLAN_HLEN))
@@ -1324,10 +1327,14 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	flags = ntohl(vxh->vx_flags);
 	vni = ntohl(vxh->vx_vni);
 
-  read_int_headers(vxh);
+  int_md_size = read_int_headers(vxh);
+  if ((int_md_size =  read_int_headers(vxh)) < 0) {
+    printk(KERN_ERR "[VXLAN-GPE] Error while reading INT headers");
+    goto error;
+  }
 
-  /* Strip out the INT shim and metadata headers */
-  __skb_pull(skb, 12);
+  /* Strip out the INT shim and metadata headers and the metadata values */
+  __skb_pull(skb, int_md_size);
 
   /* Clear the GPE flag and next proto bits in order to pass the checks below */
   flags &= ~VXLAN_HF_GPE;

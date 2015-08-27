@@ -29,6 +29,18 @@ while 1:
                 
     msg_id = msg_id + 1 
 
-    print socket.ntohl(struct.unpack('I', buf[12:16])[0])
-    print socket.ntohl(struct.unpack('I', buf[16:20])[0])
+    (rsvd, ins_cnt, max_hop_cnt, tot_hop_cnt) = struct.unpack('B B B B', buf[4:8
+    ins_cnt = ins_cnt & 0x1F
+    print "rsvd: ", rsvd
+    print "ins_cnt: ", ins_cnt
+    print "max_hop_cnt: ", max_hop_cnt
+    print "tot_hop_cnt: ", tot_hop_cnt
 
+    ins_mask = struct.unpack('H', buf[8:10])[0]
+    print "ins_mask: 0x%2X" % ins_mask
+    
+    idx = 12
+    num_int_md_vals = ins_cnt * tot_hop_cnt
+    for i in range(num_int_md_vals):
+        print i, ": ", socket.ntohl(struct.unpack('I', buf[idx:idx+4])[0])
+        idx = idx + 4

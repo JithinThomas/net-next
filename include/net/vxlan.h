@@ -143,6 +143,16 @@ struct int_md_hdr {
   __be16 reserved_flags3;
 };
 
+#define MAX_HOP_COUNT 8
+#define MAX_INS_COUNT 8
+
+struct int_pp_payload {
+  struct int_shim_hdr shim_hdr;
+  struct int_md_hdr md_hdr;
+  __be32 md_vals[MAX_HOP_COUNT * MAX_INS_COUNT];
+  int len;
+};
+
 /* VXLAN header flags. */
 #define VXLAN_HF_RCO BIT(24)
 #define VXLAN_HF_GPE BIT(26)

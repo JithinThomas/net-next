@@ -82,6 +82,9 @@ static struct vxlan_sock *vxlan_sock_add(struct net *net, __be16 port,
 #define XNT_PORT 54321
 static struct socket *xnt_socket = NULL;
 static struct sockaddr_in server;
+static char xnt_buf[1024];
+static char md_val_buf[256];
+static struct int_pp_payload int_pl;
 
 /* per-network namespace private data for this module */
 struct vxlan_net {
@@ -1229,7 +1232,7 @@ drop:
 	kfree_skb(skb);
 }
 
-static int vxlan_xmit_int_data(char *message)
+static int vxlan_xmit_int_data(struct int_pp_payload *message)
 {
   /* Prepare message header */
   struct msghdr msg;
@@ -1244,7 +1247,7 @@ static int vxlan_xmit_int_data(char *message)
   msg.msg_control = NULL;
   msg.msg_controllen = 0;
 
-  len = strlen(message);
+  len = message->len;
   iov.iov_base = message;
   iov.iov_len = len;
   iov_iter_init(&msg.msg_iter, READ, &iov, 1, len);
@@ -1259,25 +1262,14 @@ static int vxlan_xmit_int_data(char *message)
   return 0;
 } 
 
-static int xmit_int_field_int(char *field, unsigned int n)
-{
-  char buf[256];
-  sprintf(buf, "[VXLAN-GPE] %s : %d", field, n);
-  return vxlan_xmit_int_data(buf);
-}
-
-static int xmit_int_field_hex(char *field, unsigned int n)
-{
-  char buf[256];
-  sprintf(buf, "[VXLAN-GPE] %s : 0x%02x", field, n);
-  return vxlan_xmit_int_data(buf);
-}
-
 static int read_int_headers(struct vxlanhdr *vxh)
 {
   struct int_shim_hdr *int_sh;
   struct int_md_hdr *int_md;
   int int_md_size;
+  int num_md_vals;
+  u32 *md_val;
+  int i;
 
   /* Read the INT shim header */
   int_sh = (struct int_shim_hdr *)(vxh + 1);
@@ -1285,25 +1277,24 @@ static int read_int_headers(struct vxlanhdr *vxh)
   /* Read the INT metadata header */
   int_md = (struct int_md_hdr *)(int_sh + 1);
 
-  vxlan_xmit_int_data("====================================\n");
-  xmit_int_field_int("int_tpe", int_sh->tpe);
-  xmit_int_field_int("int_length", int_sh->length);
- 
-  xmit_int_field_int("ver", int_md->ver);
-  xmit_int_field_int("dir", int_md->dir);
-  xmit_int_field_int("rep", int_md->rep);
-  xmit_int_field_int("o", int_md->o);
-  xmit_int_field_int("e", int_md->e);
-  xmit_int_field_int("rsvd1", int_md->reserved_flags1);
-  xmit_int_field_int("rsvd2", int_md->reserved_flags2);
-  xmit_int_field_int("ins_cnt", int_md->ins_cnt);
-  xmit_int_field_int("max_cnt", int_md->max_cnt);
-  xmit_int_field_int("total_cnt", int_md->total_cnt);
-  xmit_int_field_hex("ins_mask", int_md->ins_mask);
-  xmit_int_field_hex("unused_ins_mask", int_md->unused_ins_mask);
-  xmit_int_field_int("rsvd3", int_md->reserved_flags3);
+  memset(&int_pl, 0, sizeof(int_pl));
+  // TODO: This could be avoided if we receive the data from the packet into the appropriate structs
+  //       within int_pl
+  memcpy(&(int_pl.shim_hdr), int_sh, sizeof(*int_sh));
+  memcpy(&(int_pl.md_hdr), int_md, sizeof(*int_md));
 
-  int_md_size = 12 + (int_md->total_cnt * int_md->ins_cnt * 4);
+  num_md_vals = int_md->ins_cnt * int_md->total_cnt;
+  md_val = (u32)(int_md + 1);
+  for (i = 0; i < num_md_vals; i++) {
+    int_pl.md_vals[i] = htonl(*md_val);
+    md_val++;
+  }
+
+  int_md_size = 12 + (num_md_vals * 4);
+  int_pl.len = int_md_size;
+
+  vxlan_xmit_int_data(&int_pl);
+
   return int_md_size;
 }
 
@@ -1881,6 +1872,7 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 	bool udp_sum = !!(vxflags & VXLAN_F_UDP_CSUM);
 	int type = udp_sum ? SKB_GSO_UDP_TUNNEL_CSUM : SKB_GSO_UDP_TUNNEL;
 	u16 hdrlen = sizeof(struct vxlanhdr);
+  u32 *md_val;
 
 	if ((vxflags & VXLAN_F_REMCSUM_TX) &&
 	    skb->ip_summed == CHECKSUM_PARTIAL) {
@@ -1914,12 +1906,19 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 	if (IS_ERR(skb))
 		return PTR_ERR(skb);
 
+  md_val = (u32 *) skb_push(skb, sizeof(*md_val));
+  *md_val = 289;
+
+  md_val = (u32 *) skb_push(skb, sizeof(*md_val));
+  *md_val = 650;
+
   /* Insert INT metadata header */
   int_md = (struct int_md_hdr *) skb_push(skb, sizeof(*int_md));
   memset(int_md, 0, sizeof(*int_md));
-  int_md->ins_cnt = 4;
+  int_md->ins_cnt = 2;
   int_md->max_cnt = 32;
   int_md->ins_mask = 0xAC;
+  int_md->total_cnt = 1;
 
   /* Insert INT shim header */
   int_sh = (struct int_shim_hdr *) skb_push(skb, sizeof(*int_sh));

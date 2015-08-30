@@ -29,7 +29,7 @@ while 1:
                 
     msg_id = msg_id + 1 
 
-    (rsvd, ins_cnt, max_hop_cnt, tot_hop_cnt) = struct.unpack('B B B B', buf[4:8
+    (rsvd, ins_cnt, max_hop_cnt, tot_hop_cnt) = struct.unpack('B B B B', buf[4:8])
     ins_cnt = ins_cnt & 0x1F
     print "rsvd: ", rsvd
     print "ins_cnt: ", ins_cnt

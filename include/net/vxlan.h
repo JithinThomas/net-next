@@ -147,6 +147,11 @@ struct int_md_hdr {
 #define MAX_INS_COUNT 8
 
 struct int_pp_payload {
+  __be32 src_addr;
+  __be32 dst_addr;
+  __u16 src_port;
+  __u16 dst_port;
+  __u8 protocol;
   struct int_shim_hdr shim_hdr;
   struct int_md_hdr md_hdr;
   __be32 md_vals[MAX_HOP_COUNT * MAX_INS_COUNT];
@@ -158,6 +163,10 @@ struct int_pp_payload {
 #define VXLAN_HF_GPE BIT(26)
 #define VXLAN_HF_VNI BIT(27)
 #define VXLAN_HF_GBP BIT(31)
+#define VXLAN_NEXT_PROTO_CLR 0xFFFFFF00
+#define VXLAN_NEXT_PROTO_MSK 0x000000FF
+#define VXLAN_NEXT_PROTO_ETH 0x03
+#define VXLAN_NEXT_PROTO_INT 0x05
 
 /* Remote checksum offload header option */
 #define VXLAN_RCO_MASK  0x7f    /* Last byte of vni field */

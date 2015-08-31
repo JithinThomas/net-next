@@ -82,8 +82,6 @@ static struct vxlan_sock *vxlan_sock_add(struct net *net, __be16 port,
 #define XNT_PORT 54321
 static struct socket *xnt_socket = NULL;
 static struct sockaddr_in server;
-static char xnt_buf[1024];
-static char md_val_buf[256];
 static struct int_pp_payload int_pl;
 
 /* per-network namespace private data for this module */
@@ -1262,14 +1260,25 @@ static int vxlan_xmit_int_data(struct int_pp_payload *message)
   return 0;
 } 
 
-static int read_int_headers(struct vxlanhdr *vxh)
+static int read_int_headers(struct sk_buff *skb)
 {
+  struct vxlanhdr *vxh;
   struct int_shim_hdr *int_sh;
   struct int_md_hdr *int_md;
+  struct udphdr *udp_header;
+  struct iphdr *ip_header;
+  //struct ethhdr *eth_header;
   int int_md_size;
   int num_md_vals;
   u32 *md_val;
+  __u8 *tmp;
   int i;
+
+	vxh = (struct vxlanhdr *)(udp_hdr(skb) + 1);
+
+  if ((vxh->vx_flags & htonl(VXLAN_NEXT_PROTO_MSK)) != htonl(VXLAN_NEXT_PROTO_INT)) {
+    return 0;
+  }
 
   /* Read the INT shim header */
   int_sh = (struct int_shim_hdr *)(vxh + 1);
@@ -1278,20 +1287,44 @@ static int read_int_headers(struct vxlanhdr *vxh)
   int_md = (struct int_md_hdr *)(int_sh + 1);
 
   memset(&int_pl, 0, sizeof(int_pl));
-  // TODO: This could be avoided if we receive the data from the packet into the appropriate structs
-  //       within int_pl
   memcpy(&(int_pl.shim_hdr), int_sh, sizeof(*int_sh));
   memcpy(&(int_pl.md_hdr), int_md, sizeof(*int_md));
 
   num_md_vals = int_md->ins_cnt * int_md->total_cnt;
-  md_val = (u32)(int_md + 1);
+  md_val = (u32 *)(int_md + 1);
   for (i = 0; i < num_md_vals; i++) {
     int_pl.md_vals[i] = htonl(*md_val);
     md_val++;
   }
 
   int_md_size = 12 + (num_md_vals * 4);
-  int_pl.len = int_md_size;
+
+  __skb_pull(skb, int_md_size);
+
+  ip_header = (struct iphdr *)((void *)md_val + sizeof(struct ethhdr));
+  udp_header = (struct udphdr *)(ip_header + 1);
+
+  //printk(KERN_INFO "[VXLAN-GPE] h_proto: %04X\n", ntohs(eth_header->h_proto));
+
+  md_val--;
+  tmp = (__u8 *)md_val;
+  for (i = 0; i < 25; i++) {
+    printk(KERN_INFO "[VXLAN-GPE] %p : %02X %02X %02X %02X\n", tmp, tmp[0], tmp[1], tmp[2], tmp[3]);
+    tmp += 4;
+  }
+
+  printk(KERN_INFO "[VXLAN-GPE] [2] inner_src_addr : 0x%08X\n", ntohl(ip_header->saddr));
+  printk(KERN_INFO "[VXLAN-GPE] [2] inner_dst_addr : 0x%08X\n", ntohl(ip_header->daddr));
+  printk(KERN_INFO "[VXLAN-GPE] [2] inner_src_port : 0x%04X\n", ntohs(udp_header->source));
+  printk(KERN_INFO "[VXLAN-GPE] [2] inner_dst_port : 0x%04X\n", ntohs(udp_header->dest));
+  printk(KERN_INFO "[VXLAN-GPE] [2] protocol : 0x%02X\n", ip_header->protocol);
+
+  int_pl.src_addr = ntohl(ip_header->saddr);
+  int_pl.dst_addr = ntohl(ip_header->daddr);
+  int_pl.src_port = ntohs(udp_header->source);
+  int_pl.dst_port = ntohs(udp_header->dest);
+  int_pl.protocol = ip_header->protocol;
+  int_pl.len = 12 + int_md_size;
 
   vxlan_xmit_int_data(&int_pl);
 
@@ -1309,6 +1342,8 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	struct vxlan_metadata _md;
 	struct vxlan_metadata *md = &_md;
   u32 int_md_size;
+  //struct iphdr *ip_header;// = ip_hdr(skb);
+  //struct udphdr *udp_header;// = udp_hdr(skb);
 
 	/* Need Vxlan and inner Ethernet header to be present */
 	if (!pskb_may_pull(skb, VXLAN_HLEN))
@@ -1318,14 +1353,22 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	flags = ntohl(vxh->vx_flags);
 	vni = ntohl(vxh->vx_vni);
 
-  int_md_size = read_int_headers(vxh);
-  if ((int_md_size =  read_int_headers(vxh)) < 0) {
-    printk(KERN_ERR "[VXLAN-GPE] Error while reading INT headers");
+  printk(KERN_INFO "[VXLAN-GPE] Printing 4-tuple...\n");
+  //printk(KERN_INFO "[VXLAN-GPE] src_addr : %d\n", ip_header->saddr);
+  //printk(KERN_INFO "[VXLAN-GPE] dst_addr : %d\n", ip_header->daddr);
+  //printk(KERN_INFO "[VXLAN-GPE] src_port : %d\n", udp_header->source);
+  //printk(KERN_INFO "[VXLAN-GPE] dst_port : %d\n", udp_header->dest);
+  printk(KERN_INFO "[VXLAN-GPE] Printing 4-tuple... DONE\n");
+
+  //int_md_size = read_int_headers(vxh);
+  int_md_size = read_int_headers(skb);
+  if (int_md_size < 0) {
+    printk(KERN_ERR "[VXLAN-GPE] Error while reading INT headers\n");
     goto error;
   }
 
   /* Strip out the INT shim and metadata headers and the metadata values */
-  __skb_pull(skb, int_md_size);
+  //__skb_pull(skb, int_md_size);
 
   /* Clear the GPE flag and next proto bits in order to pass the checks below */
   flags &= ~VXLAN_HF_GPE;
@@ -1864,15 +1907,18 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 			  __be16 src_port, __be16 dst_port, __be32 vni,
 			  struct vxlan_metadata *md, bool xnet, u32 vxflags)
 {
-	struct vxlanhdr *vxh;
+  struct ethhdr *inner_eth_hdr;
+  struct ethhdr *outer_eth_hdr;
 	struct int_shim_hdr *int_sh;
   struct int_md_hdr *int_md;
+	struct vxlanhdr *vxh;
   int min_headroom;
 	int err;
 	bool udp_sum = !!(vxflags & VXLAN_F_UDP_CSUM);
 	int type = udp_sum ? SKB_GSO_UDP_TUNNEL_CSUM : SKB_GSO_UDP_TUNNEL;
 	u16 hdrlen = sizeof(struct vxlanhdr);
   u32 *md_val;
+  int attach_int = 0;
 
 	if ((vxflags & VXLAN_F_REMCSUM_TX) &&
 	    skb->ip_summed == CHECKSUM_PARTIAL) {
@@ -1906,25 +1952,32 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
 	if (IS_ERR(skb))
 		return PTR_ERR(skb);
 
-  md_val = (u32 *) skb_push(skb, sizeof(*md_val));
-  *md_val = 289;
+  outer_eth_hdr = eth_hdr(skb);
+  inner_eth_hdr = (struct ethhdr *)(skb->data);
 
-  md_val = (u32 *) skb_push(skb, sizeof(*md_val));
-  *md_val = 650;
+  attach_int = ((ntohs(inner_eth_hdr->h_proto) == ETH_P_IP) &&
+                ((eth_hdr(skb)->h_dest)[0] != 0x01)) ? 1 : 0;
+  if (attach_int) {
+    md_val = (u32 *) skb_push(skb, sizeof(*md_val));
+    *md_val = 289;
 
-  /* Insert INT metadata header */
-  int_md = (struct int_md_hdr *) skb_push(skb, sizeof(*int_md));
-  memset(int_md, 0, sizeof(*int_md));
-  int_md->ins_cnt = 2;
-  int_md->max_cnt = 32;
-  int_md->ins_mask = 0xAC;
-  int_md->total_cnt = 1;
+    md_val = (u32 *) skb_push(skb, sizeof(*md_val));
+    *md_val = 650;
 
-  /* Insert INT shim header */
-  int_sh = (struct int_shim_hdr *) skb_push(skb, sizeof(*int_sh));
-  memset(int_sh, 0, sizeof(*int_sh));
-  int_sh->length = 12; /* this header (4) + INT meta data header (8) */
-  int_sh->next_proto = 0x03;
+    /* Insert INT metadata header */
+    int_md = (struct int_md_hdr *) skb_push(skb, sizeof(*int_md));
+    memset(int_md, 0, sizeof(*int_md));
+    int_md->ins_cnt = 2;
+    int_md->max_cnt = 32;
+    int_md->ins_mask = 0xAC;
+    int_md->total_cnt = 1;
+
+    /* Insert INT shim header */
+    int_sh = (struct int_shim_hdr *) skb_push(skb, sizeof(*int_sh));
+    memset(int_sh, 0, sizeof(*int_sh));
+    int_sh->length = 12; /* this header (4) + INT meta data header (8) */
+    int_sh->next_proto = VXLAN_NEXT_PROTO_ETH;
+  }
 
 	vxh = (struct vxlanhdr *) __skb_push(skb, sizeof(*vxh));
 	vxh->vx_flags = htonl(VXLAN_HF_VNI);
@@ -1933,8 +1986,10 @@ static int vxlan_xmit_skb(struct rtable *rt, struct sock *sk, struct sk_buff *sk
   vxh->vx_flags |= htonl(VXLAN_HF_GPE); 
 
   /* Setting the next protocol field to 0x05 */
-  vxh->vx_flags |= htonl(BIT(0));
-  vxh->vx_flags |= htonl(BIT(2));
+  if (attach_int) {
+    vxh->vx_flags &= htonl(VXLAN_NEXT_PROTO_CLR);
+    vxh->vx_flags |= htonl(VXLAN_NEXT_PROTO_INT);
+  }
 
 	vxh->vx_vni = vni;
 
@@ -3226,8 +3281,6 @@ static struct pernet_operations vxlan_net_ops = {
 
 static int init_xnt_socket(void)
 {
-  int server_error;
-
   if (sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &xnt_socket) < 0) {
     printk(KERN_ERR "[VXLAN-GPE] Error creating xnt socket");
   }

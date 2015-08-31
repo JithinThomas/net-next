@@ -1267,10 +1267,10 @@ static int read_int_headers(struct sk_buff *skb)
   struct int_md_hdr *int_md;
   struct udphdr *udp_header;
   struct iphdr *ip_header;
-  int int_md_size;
+  int int_hdrs_size;
   int num_md_vals;
   u32 *md_val;
-  __u8 *tmp;
+  //__u8 *tmp;
   int i;
 
 	vxh = (struct vxlanhdr *)(udp_hdr(skb) + 1);
@@ -1296,40 +1296,42 @@ static int read_int_headers(struct sk_buff *skb)
     md_val++;
   }
 
-  int_md_size = 12 + (num_md_vals * 4);
+  int_hdrs_size = 12 + (num_md_vals * 4);
 
-  __skb_pull(skb, int_md_size);
+  __skb_pull(skb, int_hdrs_size);
 
   ip_header = (struct iphdr *)((void *)md_val + sizeof(struct ethhdr));
   udp_header = (struct udphdr *)(ip_header + 1);
 
+  /*
   md_val--;
   tmp = (__u8 *)md_val;
   for (i = 0; i < 25; i++) {
     printk(KERN_INFO "[VXLAN-GPE] %p : %02X %02X %02X %02X\n", tmp, tmp[0], tmp[1], tmp[2], tmp[3]);
     tmp += 4;
   }
+  */
 
-  printk(KERN_INFO "[VXLAN-GPE] [1] vxh->vni: 0x%08X\n", ntohl(vxh->vx_vni));
+  //printk(KERN_INFO "[VXLAN-GPE] [1] vxh->vni: 0x%08X\n", ntohl(vxh->vx_vni));
 
   int_pl.src_addr = ntohl(ip_header->saddr);
   int_pl.dst_addr = ntohl(ip_header->daddr);
   int_pl.src_port = ntohs(udp_header->source);
   int_pl.dst_port = ntohs(udp_header->dest);
-  int_pl.protocol = ip_header->protocol;
-  int_pl.vni = (ntohl(vxh->vx_vni) >> 8);
-  int_pl.len = 12 + int_md_size;
+  int_pl.vni_and_proto = (ntohl(vxh->vx_vni) & 0xFFFFFF00) | (ip_header -> protocol);
+  int_pl.len = 16 + int_hdrs_size;
 
+  /*
   printk(KERN_INFO "[VXLAN-GPE] [1] inner_src_addr : 0x%08X\n", int_pl.src_addr);
   printk(KERN_INFO "[VXLAN-GPE] [1] inner_dst_addr : 0x%08X\n", int_pl.dst_addr);
   printk(KERN_INFO "[VXLAN-GPE] [1] inner_src_port : 0x%04X\n", int_pl.src_port);
   printk(KERN_INFO "[VXLAN-GPE] [1] inner_dst_port : 0x%04X\n", int_pl.dst_port);
-  printk(KERN_INFO "[VXLAN-GPE] [1] protocol : 0x%02X\n", int_pl.protocol);
-  printk(KERN_INFO "[VXLAN-GPE] [1] vni: 0x%08X\n", int_pl.vni);
+  printk(KERN_INFO "[VXLAN-GPE] [1] vni_and_proto: 0x%08X\n", int_pl.vni_and_proto);
+  ///*/
 
   vxlan_xmit_int_data(&int_pl);
 
-  return int_md_size;
+  return int_hdrs_size;
 }
 
 /* Callback from net/ipv4/udp.c to receive packets */
@@ -1339,10 +1341,9 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	struct ip_tunnel_info *info;
 	struct vxlan_sock *vs;
 	struct vxlanhdr *vxh;
-	u32 flags, vni;
 	struct vxlan_metadata _md;
 	struct vxlan_metadata *md = &_md;
-  u32 int_md_size;
+	u32 flags, vni;
 
 	/* Need Vxlan and inner Ethernet header to be present */
 	if (!pskb_may_pull(skb, VXLAN_HLEN))

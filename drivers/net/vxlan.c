@@ -1267,7 +1267,6 @@ static int read_int_headers(struct sk_buff *skb)
   struct int_md_hdr *int_md;
   struct udphdr *udp_header;
   struct iphdr *ip_header;
-  //struct ethhdr *eth_header;
   int int_md_size;
   int num_md_vals;
   u32 *md_val;
@@ -1304,8 +1303,6 @@ static int read_int_headers(struct sk_buff *skb)
   ip_header = (struct iphdr *)((void *)md_val + sizeof(struct ethhdr));
   udp_header = (struct udphdr *)(ip_header + 1);
 
-  //printk(KERN_INFO "[VXLAN-GPE] h_proto: %04X\n", ntohs(eth_header->h_proto));
-
   md_val--;
   tmp = (__u8 *)md_val;
   for (i = 0; i < 25; i++) {
@@ -1313,18 +1310,22 @@ static int read_int_headers(struct sk_buff *skb)
     tmp += 4;
   }
 
-  printk(KERN_INFO "[VXLAN-GPE] [2] inner_src_addr : 0x%08X\n", ntohl(ip_header->saddr));
-  printk(KERN_INFO "[VXLAN-GPE] [2] inner_dst_addr : 0x%08X\n", ntohl(ip_header->daddr));
-  printk(KERN_INFO "[VXLAN-GPE] [2] inner_src_port : 0x%04X\n", ntohs(udp_header->source));
-  printk(KERN_INFO "[VXLAN-GPE] [2] inner_dst_port : 0x%04X\n", ntohs(udp_header->dest));
-  printk(KERN_INFO "[VXLAN-GPE] [2] protocol : 0x%02X\n", ip_header->protocol);
+  printk(KERN_INFO "[VXLAN-GPE] [1] vxh->vni: 0x%08X\n", ntohl(vxh->vx_vni));
 
   int_pl.src_addr = ntohl(ip_header->saddr);
   int_pl.dst_addr = ntohl(ip_header->daddr);
   int_pl.src_port = ntohs(udp_header->source);
   int_pl.dst_port = ntohs(udp_header->dest);
   int_pl.protocol = ip_header->protocol;
+  int_pl.vni = (ntohl(vxh->vx_vni) >> 8);
   int_pl.len = 12 + int_md_size;
+
+  printk(KERN_INFO "[VXLAN-GPE] [1] inner_src_addr : 0x%08X\n", int_pl.src_addr);
+  printk(KERN_INFO "[VXLAN-GPE] [1] inner_dst_addr : 0x%08X\n", int_pl.dst_addr);
+  printk(KERN_INFO "[VXLAN-GPE] [1] inner_src_port : 0x%04X\n", int_pl.src_port);
+  printk(KERN_INFO "[VXLAN-GPE] [1] inner_dst_port : 0x%04X\n", int_pl.dst_port);
+  printk(KERN_INFO "[VXLAN-GPE] [1] protocol : 0x%02X\n", int_pl.protocol);
+  printk(KERN_INFO "[VXLAN-GPE] [1] vni: 0x%08X\n", int_pl.vni);
 
   vxlan_xmit_int_data(&int_pl);
 
@@ -1342,8 +1343,6 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	struct vxlan_metadata _md;
 	struct vxlan_metadata *md = &_md;
   u32 int_md_size;
-  //struct iphdr *ip_header;// = ip_hdr(skb);
-  //struct udphdr *udp_header;// = udp_hdr(skb);
 
 	/* Need Vxlan and inner Ethernet header to be present */
 	if (!pskb_may_pull(skb, VXLAN_HLEN))
@@ -1353,22 +1352,10 @@ static int vxlan_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	flags = ntohl(vxh->vx_flags);
 	vni = ntohl(vxh->vx_vni);
 
-  printk(KERN_INFO "[VXLAN-GPE] Printing 4-tuple...\n");
-  //printk(KERN_INFO "[VXLAN-GPE] src_addr : %d\n", ip_header->saddr);
-  //printk(KERN_INFO "[VXLAN-GPE] dst_addr : %d\n", ip_header->daddr);
-  //printk(KERN_INFO "[VXLAN-GPE] src_port : %d\n", udp_header->source);
-  //printk(KERN_INFO "[VXLAN-GPE] dst_port : %d\n", udp_header->dest);
-  printk(KERN_INFO "[VXLAN-GPE] Printing 4-tuple... DONE\n");
-
-  //int_md_size = read_int_headers(vxh);
-  int_md_size = read_int_headers(skb);
-  if (int_md_size < 0) {
+  if (read_int_headers(skb) < 0) {
     printk(KERN_ERR "[VXLAN-GPE] Error while reading INT headers\n");
     goto error;
   }
-
-  /* Strip out the INT shim and metadata headers and the metadata values */
-  //__skb_pull(skb, int_md_size);
 
   /* Clear the GPE flag and next proto bits in order to pass the checks below */
   flags &= ~VXLAN_HF_GPE;

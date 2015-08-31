@@ -152,6 +152,7 @@ struct int_pp_payload {
   __u16 src_port;
   __u16 dst_port;
   __u8 protocol;
+  __be32 vni;
   struct int_shim_hdr shim_hdr;
   struct int_md_hdr md_hdr;
   __be32 md_vals[MAX_HOP_COUNT * MAX_INS_COUNT];
